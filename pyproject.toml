@@ -1,0 +1,7 @@
+[project]
+name = "enterprise-agentic-systems"
+version = "0.1.0"
+description = "Enterprise Agentic Systems: From Data to Deployment — training workshop"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = []
