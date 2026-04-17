@@ -60,17 +60,19 @@ code --install-extension yy0931.vscode-sqlite3-editor
 
 ### Install the data exploration tools
 
-Add jupyter and pandas as project dependencies:
+Adds jupyter and pandas as project dependencies:
 
 ```shell
 uv add jupyter pandas
 ```
 
-Give VS Code the ability to open/render/run notebooks:
+### Install the Jupyter extension for VS Code
+
+Gives VS Code the ability to open/render/run notebooks:
 
 ```shell
 code --install-extension ms-toolsai.jupyter
 ```
 
-### Install the Jupyter extension for VS Code
+
 
