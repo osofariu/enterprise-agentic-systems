@@ -49,3 +49,28 @@ $env:HTTPS_PROXY="http://your-proxy:port"   # Windows PowerShell
 ```
 
 For anything else, the [uv documentation](https://docs.astral.sh/uv/) is thorough and searchable.
+
+## Tools for data exploration
+
+### Install the `SQLite3 Editor` VSCode extension:
+
+```shell
+code --install-extension yy0931.vscode-sqlite3-editor
+```
+
+### Install the data exploration tools
+
+Add jupyter and pandas as project dependencies:
+
+```shell
+uv add jupyter pandas
+```
+
+Give VS Code the ability to open/render/run notebooks:
+
+```shell
+code --install-extension ms-toolsai.jupyter
+```
+
+### Install the Jupyter extension for VS Code
+
