@@ -76,8 +76,6 @@ components:
         `active` (default) sums `duration_hours` — total time on machines or
         in maintenance. `idle` sums gap hours (> 15 min) between sessions —
         time when a machine or operator was idle between two events.
-        Not supported on `/personnel` (managers have no gap data) or
-        `/maintenance/personnel`.
       schema:
         type: string
         enum: [active, idle]
@@ -344,11 +342,9 @@ paths:
       operationId: get_personnel
       summary: Duration by personnel – all record types
       description: >
-        Aggregate total active or idle hours grouped by personnel across all
-        record types (Regular + Maintenance). Use to find which employees have
-        the most total machine time or idle time across the full dataset.
-        Note: `mode=idle` is not supported on this endpoint because managers
-        appear only in Maintenance records and have no operator gap data.
+        Aggregate total active hours grouped by personnel across all record
+        types (Regular + Maintenance). Use to find which employees have the
+        most total machine time across the full dataset.
       tags: [Personnel]
       parameters:
         - $ref: "#/components/parameters/shift"
@@ -379,8 +375,6 @@ paths:
                     total_duration_hours: 164.18
                     average_duration_hours: 3.49
                     record_count: 47
-        "400":
-          description: "`mode=idle` is not supported on this endpoint."
 
   /api/v1/machines:
     get:
@@ -487,8 +481,7 @@ paths:
       description: >
         Aggregate maintenance hours grouped by personnel. Use to find which
         employees spend the most time on maintenance. Filter by `machine_id`
-        to see who services a specific machine. Note: `mode=idle` is not
-        supported because maintenance records have no operator gap field.
+        to see who services a specific machine.
       tags: [Personnel]
       parameters:
         - $ref: "#/components/parameters/shift"
@@ -515,8 +508,6 @@ paths:
                     total_duration_hours: 38.74
                     average_duration_hours: 2.42
                     record_count: 16
-        "400":
-          description: "`mode=idle` is not supported on this endpoint."
 
   /api/v1/maintenance/machines:
     get:
