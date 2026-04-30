@@ -126,15 +126,13 @@ components:
 
   # ── Schemas ───────────────────────────────────────────────────────────────
   schemas:
-    AggregationBucket:
+    MachineAggregationBucket:
       type: object
-      required: [key, total_duration_hours, average_duration_hours, record_count]
+      required: [machine_id, total_duration_hours, average_duration_hours, record_count]
       properties:
-        key:
+        machine_id:
           type: string
-          description: >
-            Grouping key — a personnel UUID for personnel views, or a machine
-            UUID for machine views.
+          description: Machine UUID.
           example: "1c1b5b32-097c-480c-ad0f-d6d9a90965f5"
         total_duration_hours:
           type: number
@@ -151,17 +149,40 @@ components:
           description: Number of individual records in this group.
           example: 20
 
-    AggregationResponse:
+    PersonnelAggregationBucket:
+      type: object
+      required: [personnel_id, total_duration_hours, average_duration_hours, record_count]
+      properties:
+        personnel_id:
+          type: string
+          description: Employee UUID.
+          example: "2dd301c8-a91a-4a5c-b623-c4dd26fb984f"
+        total_duration_hours:
+          type: number
+          format: float
+          description: Sum of duration_hours across all records in this group.
+          example: 187.42
+        average_duration_hours:
+          type: number
+          format: float
+          description: Average duration_hours per record in this group.
+          example: 3.47
+        record_count:
+          type: integer
+          description: Number of individual records in this group.
+          example: 54
+
+    MachineAggregationResponse:
       type: object
       required: [total_matching, total_groups, returned, omitted, results]
       properties:
         total_matching:
           type: integer
           description: Total records that matched the filters (before grouping).
-          example: 198
+          example: 814
         total_groups:
           type: integer
-          description: Total distinct groups found across all matching records.
+          description: Total distinct machine groups found.
           example: 8
         returned:
           type: integer
@@ -175,7 +196,33 @@ components:
           type: array
           description: Aggregation buckets sorted by sort_key descending.
           items:
-            $ref: "#/components/schemas/AggregationBucket"
+            $ref: "#/components/schemas/MachineAggregationBucket"
+
+    PersonnelAggregationResponse:
+      type: object
+      required: [total_matching, total_groups, returned, omitted, results]
+      properties:
+        total_matching:
+          type: integer
+          description: Total records that matched the filters (before grouping).
+          example: 814
+        total_groups:
+          type: integer
+          description: Total distinct personnel groups found.
+          example: 15
+        returned:
+          type: integer
+          description: Number of result buckets returned (≤ limit).
+          example: 5
+        omitted:
+          type: integer
+          description: Number of result buckets NOT returned (total_groups − returned).
+          example: 10
+        results:
+          type: array
+          description: Aggregation buckets sorted by sort_key descending.
+          items:
+            $ref: "#/components/schemas/PersonnelAggregationBucket"
 
     ShiftBucket:
       type: object
@@ -249,8 +296,12 @@ components:
 
     MaintenanceIssuesResponse:
       type: object
-      required: [returned, results]
+      required: [total_matching_records, returned, results]
       properties:
+        total_matching_records:
+          type: integer
+          description: Total maintenance records matching the filters (before grouping into issue buckets). Use with returned to determine whether all issue patterns have been captured.
+          example: 198
         returned:
           type: integer
           example: 5
@@ -261,7 +312,7 @@ components:
 
     RecordItem:
       type: object
-      required: [id, machine_id, personnel, title, type, start_timestamp, end_timestamp, duration_hours, shift_name]
+      required: [id, machine_id, personnel_id, title, type, start_timestamp, end_timestamp, duration_hours, shift_name]
       properties:
         id:
           type: string
@@ -270,7 +321,7 @@ components:
           type: string
           description: Machine UUID.
           example: "1c1b5b32-097c-480c-ad0f-d6d9a90965f5"
-        personnel:
+        personnel_id:
           type: string
           description: Employee UUID.
           example: "2dd301c8-a91a-4a5c-b623-c4dd26fb984f"
@@ -307,7 +358,7 @@ components:
           description: >
             Hours since this person's previous Regular session in the same shift.
             Null for the first session in a shift or for Maintenance records.
-        machine_employee_idle_hours_from_prev:
+        machine_idle_hours_from_prev:
           type: number
           format: float
           nullable: true
@@ -360,18 +411,18 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/AggregationResponse"
+                $ref: "#/components/schemas/PersonnelAggregationResponse"
               example:
                 total_matching: 814
                 total_groups: 15
                 returned: 5
                 omitted: 10
                 results:
-                  - key: "b35331ce-af2e-49dd-87e3-55b26210b784"
+                  - personnel_id: "b35331ce-af2e-49dd-87e3-55b26210b784"
                     total_duration_hours: 187.42
                     average_duration_hours: 3.47
                     record_count: 54
-                  - key: "cae8c077-3779-45b3-96a1-da2c9cfbba43"
+                  - personnel_id: "cae8c077-3779-45b3-96a1-da2c9cfbba43"
                     total_duration_hours: 164.18
                     average_duration_hours: 3.49
                     record_count: 47
@@ -401,14 +452,14 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/AggregationResponse"
+                $ref: "#/components/schemas/MachineAggregationResponse"
               example:
                 total_matching: 814
                 total_groups: 8
                 returned: 5
                 omitted: 3
                 results:
-                  - key: "1c1b5b32-097c-480c-ad0f-d6d9a90965f5"
+                  - machine_id: "1c1b5b32-097c-480c-ad0f-d6d9a90965f5"
                     total_duration_hours: 428.6
                     average_duration_hours: 3.17
                     record_count: 135
@@ -442,7 +493,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/AggregationResponse"
+                $ref: "#/components/schemas/PersonnelAggregationResponse"
 
   /api/v1/regular/machines:
     get:
@@ -470,7 +521,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/AggregationResponse"
+                $ref: "#/components/schemas/MachineAggregationResponse"
 
   # ── Maintenance-only aggregation views ────────────────────────────────────
 
@@ -497,16 +548,15 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/AggregationResponse"
+                $ref: "#/components/schemas/PersonnelAggregationResponse"
               example:
                 total_matching: 198
                 total_groups: 13
                 returned: 5
                 omitted: 8
                 results:
-                  - key: "2dd301c8-a91a-4a5c-b623-c4dd26fb984f"
+                  - personnel_id: "2dd301c8-a91a-4a5c-b623-c4dd26fb984f"
                     total_duration_hours: 38.74
-                    average_duration_hours: 2.42
                     record_count: 16
 
   /api/v1/maintenance/machines:
@@ -534,14 +584,14 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/AggregationResponse"
+                $ref: "#/components/schemas/MachineAggregationResponse"
               example:
                 total_matching: 198
                 total_groups: 8
                 returned: 5
                 omitted: 3
                 results:
-                  - key: "1c1b5b32-097c-480c-ad0f-d6d9a90965f5"
+                  - machine_id: "1c1b5b32-097c-480c-ad0f-d6d9a90965f5"
                     total_duration_hours: 68.41
                     average_duration_hours: 3.42
                     record_count: 20
@@ -627,6 +677,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/MaintenanceIssuesResponse"
               example:
+                total_matching_records: 198
                 returned: 3
                 results:
                   - machine_id: "1c1b5b32-097c-480c-ad0f-d6d9a90965f5"
@@ -727,7 +778,7 @@ paths:
                 records:
                   - id: "1c1b5b32-097c-480c-ad0f-d6d9a90965f5_2025-10-01T06:14:00_2025-10-01T11:05:03"
                     machine_id: "1c1b5b32-097c-480c-ad0f-d6d9a90965f5"
-                    personnel: "9fb932d4-f039-4722-96ff-82e389e3995a"
+                    personnel_id: "9fb932d4-f039-4722-96ff-82e389e3995a"
                     title: "Operator"
                     type: "Regular"
                     start_timestamp: "2025-10-01T06:14:00"
@@ -736,4 +787,4 @@ paths:
                     shift_name: "Day"
                     reason_code: null
                     employee_idle_hours_from_prev: null
-                    machine_employee_idle_hours_from_prev: 18.23
+                    machine_idle_hours_from_prev: 18.23
