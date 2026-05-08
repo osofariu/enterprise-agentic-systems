@@ -1,0 +1,1156 @@
+openapi: 3.0.3
+info:
+  title: Machine Usage Analytics API
+  description: >
+    Analytics API for querying machine usage data from a manufacturing floor.
+    814 records: 616 Regular operator sessions and 198 Maintenance events
+    across 8 machines and 15 employees. Data spans September–December 2025,
+    weekday shifts only.
+
+
+    **Endpoint categories:**
+
+    - **Aggregation** (`/personnel`, `/machines`, `/regular/*`, `/maintenance/*`) —
+      group and rank records by personnel or machine. Use these for discovery:
+      "which machines have the most downtime?", "who has the most maintenance hours?"
+
+    - **Shift comparison** (`/shifts/comparison`) — side-by-side utilization
+      metrics across Day, Swing, and Night shifts.
+
+    - **Maintenance analysis** (`/maintenance/issues`, `/maintenance/personnel-lookup`,
+      `/maintenance/docs`) — identify specific failure patterns, find the people
+      involved, and retrieve training documentation.
+
+    - **Operations** (`/retraining`) — write endpoint to submit a retraining
+      requirement. Requires human approval before use.
+  version: 1.0.0
+
+servers:
+  - url: http://localhost:8000
+    description: Local development
+
+# ── Shared parameters ─────────────────────────────────────────────────────
+components:
+  parameters:
+    shift:
+      name: shift
+      in: query
+      required: false
+      description: >
+        Filter by shift name. Day = 06:00–14:00, Swing = 14:00–22:00,
+        Night = 22:00–06:00.
+      schema:
+        type: string
+        enum: [day, swing, night]
+      example: day
+
+    limit:
+      name: limit
+      in: query
+      required: false
+      description: Maximum number of result buckets to return.
+      schema:
+        type: integer
+        default: 10
+        minimum: 1
+        maximum: 100
+      example: 10
+
+    sort_key:
+      name: sort_key
+      in: query
+      required: false
+      description: >
+        Field to sort result buckets by, descending. `total_duration_hours`
+        ranks by total time; `average_duration_hours` by average event length;
+        `record_count` by number of events.
+      schema:
+        type: string
+        enum: [total_duration_hours, average_duration_hours, record_count]
+        default: total_duration_hours
+
+    mode:
+      name: mode
+      in: query
+      required: false
+      description: >
+        `active` (default) sums `duration_hours` — total time on machines or
+        in maintenance. `idle` sums gap hours (> 15 min) between sessions —
+        time when a machine or operator was idle between two events.
+        Not supported on `/personnel` (managers have no gap data) or
+        `/maintenance/personnel`.
+      schema:
+        type: string
+        enum: [active, idle]
+        default: active
+
+    start_date:
+      name: start_date
+      in: query
+      required: false
+      description: >
+        Include records with `start_timestamp` on or after this date.
+        Data spans September–December 2025; weekdays only.
+      schema:
+        type: string
+        format: date
+      example: "2025-10-01"
+
+    end_date:
+      name: end_date
+      in: query
+      required: false
+      description: >
+        Include records with `start_timestamp` on or before this date.
+      schema:
+        type: string
+        format: date
+      example: "2025-12-31"
+
+    machine_id:
+      name: machine_id
+      in: query
+      required: false
+      description: Filter results to a specific machine UUID.
+      schema:
+        type: string
+        format: uuid
+      example: "1c1b5b32-097c-480c-ad0f-d6d9a90965f5"
+
+    personnel_id:
+      name: personnel_id
+      in: query
+      required: false
+      description: Filter results to a specific employee UUID.
+      schema:
+        type: string
+        format: uuid
+      example: "2dd301c8-a91a-4a5c-b623-c4dd26fb984f"
+
+    reason_code:
+      name: reason_code
+      in: query
+      required: false
+      description: >
+        Filter to a specific failure reason code UUID. Only applicable to
+        Maintenance endpoints — narrows results to a single failure type.
+        Get valid reason code UUIDs from `GET /maintenance/issues`.
+      schema:
+        type: string
+        format: uuid
+      example: "af11c1e7-7946-4a34-abd2-ed1c05f73dba"
+
+  # ── Schemas ───────────────────────────────────────────────────────────────
+  schemas:
+    MachineAggregationBucket:
+      type: object
+      required: [machine_id, total_duration_hours, average_duration_hours, record_count]
+      properties:
+        machine_id:
+          type: string
+          description: Machine UUID.
+          example: "1c1b5b32-097c-480c-ad0f-d6d9a90965f5"
+        total_duration_hours:
+          type: number
+          format: float
+          description: Sum of duration_hours across all records in this group.
+          example: 68.41
+        average_duration_hours:
+          type: number
+          format: float
+          description: Average duration_hours per record in this group.
+          example: 3.42
+        record_count:
+          type: integer
+          description: Number of individual records in this group.
+          example: 20
+
+    PersonnelAggregationBucket:
+      type: object
+      required: [personnel_id, total_duration_hours, average_duration_hours, record_count]
+      properties:
+        personnel_id:
+          type: string
+          description: Employee UUID.
+          example: "2dd301c8-a91a-4a5c-b623-c4dd26fb984f"
+        total_duration_hours:
+          type: number
+          format: float
+          description: Sum of duration_hours across all records in this group.
+          example: 187.42
+        average_duration_hours:
+          type: number
+          format: float
+          description: Average duration_hours per record in this group.
+          example: 3.47
+        record_count:
+          type: integer
+          description: Number of individual records in this group.
+          example: 54
+
+    MachineAggregationResponse:
+      type: object
+      required: [total_matching, total_groups, returned, omitted, results]
+      properties:
+        total_matching:
+          type: integer
+          description: Total records that matched the filters (before grouping).
+          example: 814
+        total_groups:
+          type: integer
+          description: Total distinct machine groups found.
+          example: 8
+        returned:
+          type: integer
+          description: Number of result buckets returned (≤ limit).
+          example: 5
+        omitted:
+          type: integer
+          description: Number of result buckets NOT returned (total_groups − returned).
+          example: 3
+        results:
+          type: array
+          description: Aggregation buckets sorted by sort_key descending.
+          items:
+            $ref: "#/components/schemas/MachineAggregationBucket"
+
+    PersonnelAggregationResponse:
+      type: object
+      required: [total_matching, total_groups, returned, omitted, results]
+      properties:
+        total_matching:
+          type: integer
+          description: Total records that matched the filters (before grouping).
+          example: 814
+        total_groups:
+          type: integer
+          description: Total distinct personnel groups found.
+          example: 15
+        returned:
+          type: integer
+          description: Number of result buckets returned (≤ limit).
+          example: 5
+        omitted:
+          type: integer
+          description: Number of result buckets NOT returned (total_groups − returned).
+          example: 10
+        results:
+          type: array
+          description: Aggregation buckets sorted by sort_key descending.
+          items:
+            $ref: "#/components/schemas/PersonnelAggregationBucket"
+
+    ShiftBucket:
+      type: object
+      required: [shift, hours, total_idle_hours, maintenance_idle_hours, operator_gap_idle_hours, maintenance_events, utilization_pct]
+      properties:
+        shift:
+          type: string
+          description: Shift name.
+          enum: [Day, Swing, Night]
+        hours:
+          type: string
+          description: Shift time range.
+          example: "06:00-14:00"
+        total_idle_hours:
+          type: number
+          format: float
+          description: Combined maintenance + operator gap idle hours.
+          example: 42.3
+        maintenance_idle_hours:
+          type: number
+          format: float
+          description: Hours spent in maintenance events.
+          example: 28.1
+        operator_gap_idle_hours:
+          type: number
+          format: float
+          description: Hours of operator idle gaps (> 15 min between sessions).
+          example: 14.2
+        maintenance_events:
+          type: integer
+          description: Count of maintenance records in this shift.
+          example: 34
+        utilization_pct:
+          type: number
+          format: float
+          description: "Utilization percentage: (1 − total_idle / total_duration) × 100."
+          example: 78.4
+
+    ShiftComparisonResponse:
+      type: object
+      required: [shifts]
+      properties:
+        shifts:
+          type: array
+          items:
+            $ref: "#/components/schemas/ShiftBucket"
+
+    MaintenanceIssueBucket:
+      type: object
+      required: [machine_id, reason_code, total_duration_hours, average_duration_hours, record_count]
+      properties:
+        machine_id:
+          type: string
+          description: Machine UUID.
+          example: "1c1b5b32-097c-480c-ad0f-d6d9a90965f5"
+        reason_code:
+          type: string
+          description: Maintenance reason code UUID.
+          example: "0e4a1175-ec15-4269-b9e4-8824b1eb72c8"
+        total_duration_hours:
+          type: number
+          format: float
+          example: 18.5
+        average_duration_hours:
+          type: number
+          format: float
+          example: 3.7
+        record_count:
+          type: integer
+          example: 5
+
+    MaintenanceIssuesResponse:
+      type: object
+      required: [total_matching_records, returned, results]
+      properties:
+        total_matching_records:
+          type: integer
+          description: Total maintenance records matching the filters (before grouping into issue buckets). Use with returned to determine whether all issue patterns have been captured.
+          example: 198
+        returned:
+          type: integer
+          example: 5
+        results:
+          type: array
+          items:
+            $ref: "#/components/schemas/MaintenanceIssueBucket"
+
+    MachineReasonPair:
+      type: object
+      required: [machine_id, reason_code]
+      properties:
+        machine_id:
+          type: string
+          description: Machine UUID.
+          example: "1c1b5b32-097c-480c-ad0f-d6d9a90965f5"
+        reason_code:
+          type: string
+          description: Reason code UUID.
+          example: "0e4a1175-ec15-4269-b9e4-8824b1eb72c8"
+
+    PersonnelIssueBucket:
+      type: object
+      required: [machine_id, reason_code, total_duration_hours, average_duration_hours, record_count]
+      properties:
+        machine_id:
+          type: string
+          example: "1c1b5b32-097c-480c-ad0f-d6d9a90965f5"
+        reason_code:
+          type: string
+          example: "0e4a1175-ec15-4269-b9e4-8824b1eb72c8"
+        total_duration_hours:
+          type: number
+          format: float
+          example: 7.2
+        average_duration_hours:
+          type: number
+          format: float
+          example: 3.6
+        record_count:
+          type: integer
+          example: 2
+
+    MaintenancePersonnelBucket:
+      type: object
+      required: [personnel_id, total_duration_hours, average_duration_hours, record_count, issues]
+      properties:
+        personnel_id:
+          type: string
+          description: Employee UUID.
+          example: "2dd301c8-a91a-4a5c-b623-c4dd26fb984f"
+        personnel_name:
+          type: string
+          nullable: true
+          description: First and last name, if known.
+          example: "Jordan Okafor"
+        total_duration_hours:
+          type: number
+          format: float
+          example: 14.4
+        average_duration_hours:
+          type: number
+          format: float
+          example: 3.6
+        record_count:
+          type: integer
+          example: 4
+        issues:
+          type: array
+          description: Per-issue breakdown for this person.
+          items:
+            $ref: "#/components/schemas/PersonnelIssueBucket"
+
+    MaintenancePersonnelRequest:
+      type: object
+      required: [issues]
+      properties:
+        issues:
+          type: array
+          minItems: 1
+          description: One or more (machine_id, reason_code) pairs to search for.
+          items:
+            $ref: "#/components/schemas/MachineReasonPair"
+        start_date:
+          type: string
+          format: date
+          nullable: true
+          example: "2025-10-01"
+        end_date:
+          type: string
+          format: date
+          nullable: true
+          example: "2025-12-31"
+        limit:
+          type: integer
+          default: 10
+          minimum: 1
+          maximum: 100
+          example: 10
+
+    MaintenancePersonnelResponse:
+      type: object
+      required: [returned, results]
+      properties:
+        returned:
+          type: integer
+          example: 4
+        results:
+          type: array
+          items:
+            $ref: "#/components/schemas/MaintenancePersonnelBucket"
+
+    MaintenanceDocItem:
+      type: object
+      required: [reason_code, reason_type, document]
+      properties:
+        reason_code:
+          type: string
+          example: "0e4a1175-ec15-4269-b9e4-8824b1eb72c8"
+        reason_type:
+          type: string
+          enum: [description, SOP, training, support]
+          description: >
+            `description` — technical summary of the failure;
+            `SOP` — standard operating procedure;
+            `training` — training material for operators;
+            `support` — vendor/specialist contact information.
+        document:
+          type: string
+          description: Full document text.
+          example: "Electrical fault in main control panel — check breaker contacts and wiring harness."
+
+    MaintenanceDocsRequest:
+      type: object
+      required: [reason_codes]
+      properties:
+        reason_codes:
+          type: array
+          description: List of reason code UUIDs to fetch documents for.
+          items:
+            type: string
+          example: ["0e4a1175-ec15-4269-b9e4-8824b1eb72c8"]
+        limit:
+          type: integer
+          default: 5
+          minimum: 1
+          maximum: 20
+          description: Max documents per reason code.
+
+    MaintenanceDocsResponse:
+      type: object
+      required: [docs]
+      properties:
+        docs:
+          type: array
+          items:
+            $ref: "#/components/schemas/MaintenanceDocItem"
+
+    RetrainingRequest:
+      type: object
+      required: [machine_id, personnel_id, reason]
+      properties:
+        machine_id:
+          type: string
+          format: uuid
+          description: UUID of the machine.
+          pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          example: "1c1b5b32-097c-480c-ad0f-d6d9a90965f5"
+        personnel_id:
+          type: string
+          format: uuid
+          description: UUID of the employee requiring retraining.
+          pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          example: "2dd301c8-a91a-4a5c-b623-c4dd26fb984f"
+        reason:
+          type: string
+          minLength: 10
+          maxLength: 500
+          description: Brief explanation of why retraining is needed.
+          example: "Repeated hydraulic fault events with above-average repair duration"
+        recommendation_basis:
+          type: string
+          nullable: true
+          maxLength: 1000
+          description: Optional context from the analysis that led to this recommendation.
+
+    RetrainingResponse:
+      type: object
+      required: [status, message]
+      properties:
+        status:
+          type: string
+          enum: [success, error]
+        message:
+          type: string
+        record_id:
+          type: integer
+          nullable: true
+          description: Database ID of the created record (present on success).
+        machine_id:
+          type: string
+          nullable: true
+          description: Echo of submitted machine_id.
+        personnel_id:
+          type: string
+          nullable: true
+          description: Echo of submitted personnel_id.
+        reason:
+          type: string
+          nullable: true
+          description: Echo of submitted reason.
+
+    RecordItem:
+      type: object
+      required: [id, machine_id, personnel_id, title, type, start_timestamp, end_timestamp, duration_hours, shift_name]
+      properties:
+        id:
+          type: string
+          description: Composite document ID.
+        machine_id:
+          type: string
+          description: Machine UUID.
+          example: "1c1b5b32-097c-480c-ad0f-d6d9a90965f5"
+        personnel_id:
+          type: string
+          description: Employee UUID.
+          example: "2dd301c8-a91a-4a5c-b623-c4dd26fb984f"
+        title:
+          type: string
+          enum: [Operator, Manager, Maintenance]
+        type:
+          type: string
+          enum: [Regular, Maintenance]
+        start_timestamp:
+          type: string
+          format: date-time
+          example: "2025-10-01T06:14:00"
+        end_timestamp:
+          type: string
+          format: date-time
+          example: "2025-10-01T11:05:03"
+        duration_hours:
+          type: number
+          format: float
+          example: 4.85
+        shift_name:
+          type: string
+          enum: [Day, Swing, Night]
+        reason_code:
+          type: string
+          nullable: true
+          description: Maintenance reason code UUID; null for Regular records.
+          example: null
+        employee_idle_hours_from_prev:
+          type: number
+          format: float
+          nullable: true
+          description: >
+            Hours since this person's previous Regular session in the same shift.
+            Null for the first session in a shift or for Maintenance records.
+        machine_idle_hours_from_prev:
+          type: number
+          format: float
+          nullable: true
+          description: >
+            Hours since the previous session on this machine (any type).
+            Null for the first recorded session on this machine.
+
+    RecordsResponse:
+      type: object
+      required: [total_matching, returned, records]
+      properties:
+        total_matching:
+          type: integer
+          description: Total records matching the filters (before limit is applied).
+          example: 84
+        returned:
+          type: integer
+          description: Number of records returned (≤ limit).
+          example: 20
+        records:
+          type: array
+          items:
+            $ref: "#/components/schemas/RecordItem"
+
+# ── Paths ─────────────────────────────────────────────────────────────────
+paths:
+
+  # ── Untyped aggregation views ────────────────────────────────────────────
+
+  /api/v1/personnel:
+    get:
+      operationId: get_personnel
+      summary: Duration by personnel – all record types
+      description: >
+        Aggregate total active hours grouped by personnel across all record
+        types (Regular + Maintenance). Use to find which employees have the
+        most total machine time across the full dataset.
+        Note: `mode=idle` is not supported on this endpoint because managers
+        appear only in Maintenance records and have no operator gap data.
+      tags: [Personnel]
+      parameters:
+        - $ref: "#/components/parameters/shift"
+        - $ref: "#/components/parameters/limit"
+        - $ref: "#/components/parameters/sort_key"
+        - $ref: "#/components/parameters/start_date"
+        - $ref: "#/components/parameters/end_date"
+        - $ref: "#/components/parameters/machine_id"
+        - $ref: "#/components/parameters/personnel_id"
+      responses:
+        "200":
+          description: Aggregated results grouped by personnel.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PersonnelAggregationResponse"
+              example:
+                total_matching: 814
+                total_groups: 15
+                returned: 5
+                omitted: 10
+                results:
+                  - personnel_id: "b35331ce-af2e-49dd-87e3-55b26210b784"
+                    total_duration_hours: 187.42
+                    average_duration_hours: 3.47
+                    record_count: 54
+                  - personnel_id: "cae8c077-3779-45b3-96a1-da2c9cfbba43"
+                    total_duration_hours: 164.18
+                    average_duration_hours: 3.49
+                    record_count: 47
+
+  /api/v1/machines:
+    get:
+      operationId: get_machines
+      summary: Duration by machine – all record types
+      description: >
+        Aggregate total active or idle hours grouped by machine across all
+        record types (Regular + Maintenance). Use to rank machines by total
+        usage or by idle gap time. This is often the first step in identifying
+        which machines need attention.
+      tags: [Machines]
+      parameters:
+        - $ref: "#/components/parameters/shift"
+        - $ref: "#/components/parameters/limit"
+        - $ref: "#/components/parameters/sort_key"
+        - $ref: "#/components/parameters/mode"
+        - $ref: "#/components/parameters/start_date"
+        - $ref: "#/components/parameters/end_date"
+        - $ref: "#/components/parameters/machine_id"
+        - $ref: "#/components/parameters/personnel_id"
+      responses:
+        "200":
+          description: Aggregated results grouped by machine.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MachineAggregationResponse"
+              example:
+                total_matching: 814
+                total_groups: 8
+                returned: 5
+                omitted: 3
+                results:
+                  - machine_id: "1c1b5b32-097c-480c-ad0f-d6d9a90965f5"
+                    total_duration_hours: 428.6
+                    average_duration_hours: 3.17
+                    record_count: 135
+
+  # ── Regular-only views ────────────────────────────────────────────────────
+
+  /api/v1/regular/personnel:
+    get:
+      operationId: get_regular_personnel
+      summary: Duration by personnel – Regular sessions only
+      description: >
+        Aggregate hours for Regular (operator) sessions only, grouped by
+        personnel. Supports `mode=idle` (gap hours between sessions) and
+        `mode=active` with optional shift-level aggregation via `sort_key`.
+        Use to compare operator productivity or identify personnel with
+        unusual idle patterns. Filter by `machine_id` to rank operators
+        by time spent on a specific machine.
+      tags: [Personnel]
+      parameters:
+        - $ref: "#/components/parameters/shift"
+        - $ref: "#/components/parameters/limit"
+        - $ref: "#/components/parameters/sort_key"
+        - $ref: "#/components/parameters/mode"
+        - $ref: "#/components/parameters/start_date"
+        - $ref: "#/components/parameters/end_date"
+        - $ref: "#/components/parameters/machine_id"
+        - $ref: "#/components/parameters/personnel_id"
+      responses:
+        "200":
+          description: Aggregated results grouped by personnel (Regular only).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PersonnelAggregationResponse"
+
+  /api/v1/regular/machines:
+    get:
+      operationId: get_regular_machines
+      summary: Duration by machine – Regular sessions only
+      description: >
+        Aggregate hours for Regular (operator) sessions only, grouped by
+        machine. Use to see which machines get the most operator time,
+        excluding maintenance downtime. Supports `mode=idle` for machine
+        idle gaps. Filter by `personnel_id` to see which machines a specific
+        operator uses most.
+      tags: [Machines]
+      parameters:
+        - $ref: "#/components/parameters/shift"
+        - $ref: "#/components/parameters/limit"
+        - $ref: "#/components/parameters/sort_key"
+        - $ref: "#/components/parameters/mode"
+        - $ref: "#/components/parameters/start_date"
+        - $ref: "#/components/parameters/end_date"
+        - $ref: "#/components/parameters/machine_id"
+        - $ref: "#/components/parameters/personnel_id"
+      responses:
+        "200":
+          description: Aggregated results grouped by machine (Regular only).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MachineAggregationResponse"
+
+  # ── Maintenance-only aggregation views ────────────────────────────────────
+
+  /api/v1/maintenance/personnel:
+    get:
+      operationId: get_maintenance_personnel
+      summary: Duration by personnel – Maintenance events only
+      description: >
+        Aggregate maintenance hours grouped by personnel. Use to find which
+        employees spend the most time on maintenance. Filter by `machine_id`
+        to see who services a specific machine. Filter by `reason_code` to
+        narrow to a specific failure type — useful when starting from a known
+        failure pattern. Note: `mode=idle` is not supported because maintenance
+        records have no operator gap field.
+      tags: [Personnel]
+      parameters:
+        - $ref: "#/components/parameters/shift"
+        - $ref: "#/components/parameters/limit"
+        - $ref: "#/components/parameters/sort_key"
+        - $ref: "#/components/parameters/start_date"
+        - $ref: "#/components/parameters/end_date"
+        - $ref: "#/components/parameters/machine_id"
+        - $ref: "#/components/parameters/personnel_id"
+        - $ref: "#/components/parameters/reason_code"
+      responses:
+        "200":
+          description: Aggregated results grouped by personnel (Maintenance only).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PersonnelAggregationResponse"
+              example:
+                total_matching: 198
+                total_groups: 13
+                returned: 5
+                omitted: 8
+                results:
+                  - personnel_id: "2dd301c8-a91a-4a5c-b623-c4dd26fb984f"
+                    total_duration_hours: 38.74
+                    average_duration_hours: 2.42
+                    record_count: 16
+
+  /api/v1/maintenance/machines:
+    get:
+      operationId: get_maintenance_machines
+      summary: Duration by machine – Maintenance events only
+      description: >
+        Aggregate maintenance hours grouped by machine. Use to rank which
+        machines have the most total maintenance downtime. Supports `mode=idle`
+        for machine idle gaps between maintenance events. Filter by `personnel_id`
+        to see which machines a specific technician services most. Filter by
+        `reason_code` to see which machines are most affected by a specific
+        failure type — useful when a failure pattern is already known.
+      tags: [Machines]
+      parameters:
+        - $ref: "#/components/parameters/shift"
+        - $ref: "#/components/parameters/limit"
+        - $ref: "#/components/parameters/sort_key"
+        - $ref: "#/components/parameters/mode"
+        - $ref: "#/components/parameters/start_date"
+        - $ref: "#/components/parameters/end_date"
+        - $ref: "#/components/parameters/machine_id"
+        - $ref: "#/components/parameters/personnel_id"
+        - $ref: "#/components/parameters/reason_code"
+      responses:
+        "200":
+          description: Aggregated results grouped by machine (Maintenance only).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MachineAggregationResponse"
+              example:
+                total_matching: 198
+                total_groups: 8
+                returned: 5
+                omitted: 3
+                results:
+                  - machine_id: "1c1b5b32-097c-480c-ad0f-d6d9a90965f5"
+                    total_duration_hours: 68.41
+                    average_duration_hours: 3.42
+                    record_count: 20
+
+  # ── Shift comparison ────────────────────────────────────────────────────
+
+  /api/v1/shifts/comparison:
+    get:
+      operationId: get_shift_comparison
+      summary: Compare idle time and utilization across shifts
+      description: >
+        Side-by-side metrics for Day, Swing, and Night shifts. Returns total
+        idle hours broken down into maintenance downtime and operator gap
+        time, plus a utilization percentage for each shift. Use to identify
+        which shift has structural efficiency problems vs. isolated incidents.
+      tags: [Shifts]
+      parameters:
+        - $ref: "#/components/parameters/start_date"
+        - $ref: "#/components/parameters/end_date"
+      responses:
+        "200":
+          description: Shift-level utilization and idle time metrics.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ShiftComparisonResponse"
+              example:
+                shifts:
+                  - shift: "Day"
+                    hours: "06:00-14:00"
+                    total_idle_hours: 42.3
+                    maintenance_idle_hours: 28.1
+                    operator_gap_idle_hours: 14.2
+                    maintenance_events: 34
+                    utilization_pct: 78.4
+                  - shift: "Swing"
+                    hours: "14:00-22:00"
+                    total_idle_hours: 38.7
+                    maintenance_idle_hours: 24.9
+                    operator_gap_idle_hours: 13.8
+                    maintenance_events: 29
+                    utilization_pct: 81.2
+                  - shift: "Night"
+                    hours: "22:00-06:00"
+                    total_idle_hours: 51.6
+                    maintenance_idle_hours: 35.4
+                    operator_gap_idle_hours: 16.2
+                    maintenance_events: 41
+                    utilization_pct: 74.1
+
+  # ── Maintenance analysis ─────────────────────────────────────────────────
+
+  /api/v1/maintenance/issues:
+    get:
+      operationId: get_maintenance_issues
+      summary: Top maintenance issues by downtime (machine + reason code)
+      description: >
+        Rank maintenance events by total downtime, grouped by the composite
+        key (machine_id, reason_code). This is typically the first step in a
+        diagnostic workflow — it tells you which specific failure type on which
+        specific machine is consuming the most time. Filter by `machine_id` to
+        see all breakdown patterns for a specific machine. Feed the results into
+        `/maintenance/personnel-lookup` to find the people involved.
+      tags: [Maintenance]
+      parameters:
+        - $ref: "#/components/parameters/shift"
+        - $ref: "#/components/parameters/machine_id"
+        - name: limit
+          in: query
+          required: false
+          description: Max issue buckets to return.
+          schema:
+            type: integer
+            default: 5
+            minimum: 1
+            maximum: 100
+        - $ref: "#/components/parameters/start_date"
+        - $ref: "#/components/parameters/end_date"
+      responses:
+        "200":
+          description: Top maintenance issues ranked by total downtime.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MaintenanceIssuesResponse"
+              example:
+                total_matching_records: 198
+                returned: 3
+                results:
+                  - machine_id: "1c1b5b32-097c-480c-ad0f-d6d9a90965f5"
+                    reason_code: "0e4a1175-ec15-4269-b9e4-8824b1eb72c8"
+                    total_duration_hours: 18.5
+                    average_duration_hours: 3.7
+                    record_count: 5
+                  - machine_id: "80d16aaf-f1a4-4fe5-ad78-dc4bfb9e8dda"
+                    reason_code: "f94cf6b0-c986-4a9f-a664-718333674334"
+                    total_duration_hours: 15.2
+                    average_duration_hours: 3.8
+                    record_count: 4
+
+  /api/v1/maintenance/personnel-lookup:
+    post:
+      operationId: maintenance_personnel_lookup
+      summary: Find personnel involved in specific maintenance issues
+      description: >
+        Given one or more (machine_id, reason_code) pairs (typically from
+        `/maintenance/issues`), returns the personnel who performed that
+        maintenance with aggregate stats and a per-issue breakdown. Use this
+        to answer "who is doing the work on this specific problem?" before
+        deciding whether retraining is appropriate.
+      tags: [Maintenance]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MaintenancePersonnelRequest"
+            example:
+              issues:
+                - machine_id: "1c1b5b32-097c-480c-ad0f-d6d9a90965f5"
+                  reason_code: "0e4a1175-ec15-4269-b9e4-8824b1eb72c8"
+              start_date: "2025-10-01"
+              end_date: "2025-12-31"
+              limit: 10
+      responses:
+        "200":
+          description: Personnel involved in the specified maintenance issues.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MaintenancePersonnelResponse"
+              example:
+                returned: 2
+                results:
+                  - personnel_id: "2dd301c8-a91a-4a5c-b623-c4dd26fb984f"
+                    personnel_name: "Jordan Okafor"
+                    total_duration_hours: 14.4
+                    average_duration_hours: 3.6
+                    record_count: 4
+                    issues:
+                      - machine_id: "1c1b5b32-097c-480c-ad0f-d6d9a90965f5"
+                        reason_code: "0e4a1175-ec15-4269-b9e4-8824b1eb72c8"
+                        total_duration_hours: 14.4
+                        average_duration_hours: 3.6
+                        record_count: 4
+
+  /api/v1/maintenance/docs:
+    post:
+      operationId: get_maintenance_docs
+      summary: Retrieve documents for maintenance reason codes
+      description: >
+        Fetch training guides, standard operating procedures, and vendor
+        support contacts for one or more reason code UUIDs. Each reason code
+        has up to four document types: `description` (technical summary),
+        `SOP` (standard procedure), `training` (operator guidance), and
+        `support` (vendor contacts). Use this after identifying problematic
+        reason codes to find actionable remediation resources.
+      tags: [Maintenance]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MaintenanceDocsRequest"
+            example:
+              reason_codes:
+                - "0e4a1175-ec15-4269-b9e4-8824b1eb72c8"
+              limit: 5
+      responses:
+        "200":
+          description: Documents for the requested reason codes.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MaintenanceDocsResponse"
+              example:
+                docs:
+                  - reason_code: "0e4a1175-ec15-4269-b9e4-8824b1eb72c8"
+                    reason_type: "description"
+                    document: "Electrical fault in main control panel — check breaker contacts and wiring harness."
+                  - reason_code: "0e4a1175-ec15-4269-b9e4-8824b1eb72c8"
+                    reason_type: "training"
+                    document: "Operators should inspect panel connections at the start of each shift..."
+
+  # ── Operations (Write) ────────────────────────────────────────────────────
+
+  /api/v1/retraining:
+    post:
+      operationId: submit_retraining_request
+      summary: Submit a retraining requirement
+      description: >
+        Write a retraining requirement to the database for a specific
+        machine-personnel pair. Personnel flagged may be operators whose sessions
+        precede repeated breakdowns (identified via `/records` correlated with
+        `/maintenance/issues`), or maintenance technicians whose repairs show
+        above-average durations or recurring failures (identified via
+        `/maintenance/personnel-lookup`). The `recommendation_basis` field
+        should capture the specific analysis findings that support the request.
+
+        This is a **HIGH-IMPACT write operation**. Only call when analysis has
+        confirmed a specific person is a training gap and a specific machine is
+        the context. Always obtain human approval before submitting. Do NOT call
+        for exploratory analysis or general questions.
+      tags: [Operations]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RetrainingRequest"
+            example:
+              machine_id: "1c1b5b32-097c-480c-ad0f-d6d9a90965f5"
+              personnel_id: "2dd301c8-a91a-4a5c-b623-c4dd26fb984f"
+              reason: "Repeated electrical fault events with above-average repair duration"
+              recommendation_basis: "4 events on this machine, avg 3.6h vs 2.4h baseline"
+      responses:
+        "201":
+          description: Retraining requirement submitted successfully.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RetrainingResponse"
+              example:
+                status: "success"
+                message: "Retraining requirement submitted successfully"
+                record_id: 1
+                machine_id: "1c1b5b32-097c-480c-ad0f-d6d9a90965f5"
+                personnel_id: "2dd301c8-a91a-4a5c-b623-c4dd26fb984f"
+                reason: "Repeated electrical fault events with above-average repair duration"
+        "400":
+          description: Invalid request (malformed UUID, reason too short/long).
+        "500":
+          description: Database write error.
+
+  # ── Raw record search ─────────────────────────────────────────────────────
+
+  /api/v1/records:
+    get:
+      operationId: get_records
+      summary: Search individual records with optional filters
+      description: >
+        Return individual (non-aggregated) records from the index. This is the
+        **diagnosis endpoint** — use it after aggregates have identified a
+        machine or operator of interest, and you need to see exactly what
+        happened and when.
+
+
+        Both `machine_id` and `personnel_id` can be combined with `type`,
+        `shift`, and date range filters to narrow results. Results are sorted
+        chronologically by `start_timestamp` (ascending by default).
+
+
+        Typical workflows:
+
+        - Machine timeline: `?machine_id=<uuid>` — see every session on that
+          machine in time order (Regular operator sessions interspersed with
+          Maintenance events).
+
+        - Operator history: `?personnel_id=<uuid>` — see everything a specific
+          person has done across all machines and shifts.
+
+        - Incident investigation: `?machine_id=<uuid>&type=maintenance` — isolate
+          only the maintenance events for a specific machine.
+      tags: [Records]
+      parameters:
+        - name: machine_id
+          in: query
+          required: false
+          description: Filter to a specific machine UUID.
+          schema:
+            type: string
+            format: uuid
+          example: "1c1b5b32-097c-480c-ad0f-d6d9a90965f5"
+        - name: personnel_id
+          in: query
+          required: false
+          description: Filter to a specific employee UUID.
+          schema:
+            type: string
+            format: uuid
+          example: "2dd301c8-a91a-4a5c-b623-c4dd26fb984f"
+        - name: type
+          in: query
+          required: false
+          description: Filter by record type.
+          schema:
+            type: string
+            enum: [regular, maintenance]
+        - $ref: "#/components/parameters/shift"
+        - $ref: "#/components/parameters/start_date"
+        - $ref: "#/components/parameters/end_date"
+        - name: limit
+          in: query
+          required: false
+          description: Maximum number of records to return.
+          schema:
+            type: integer
+            default: 20
+            minimum: 1
+            maximum: 100
+        - name: sort
+          in: query
+          required: false
+          description: Sort direction on `start_timestamp`.
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: asc
+      responses:
+        "200":
+          description: Individual records matching the filters.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecordsResponse"
+              example:
+                total_matching: 84
+                returned: 5
+                records:
+                  - id: "1c1b5b32-097c-480c-ad0f-d6d9a90965f5_2025-10-01T06:14:00_2025-10-01T11:05:03"
+                    machine_id: "1c1b5b32-097c-480c-ad0f-d6d9a90965f5"
+                    personnel_id: "9fb932d4-f039-4722-96ff-82e389e3995a"
+                    title: "Operator"
+                    type: "Regular"
+                    start_timestamp: "2025-10-01T06:14:00"
+                    end_timestamp: "2025-10-01T11:05:03"
+                    duration_hours: 4.85
+                    shift_name: "Day"
+                    reason_code: null
+                    employee_idle_hours_from_prev: null
+                    machine_idle_hours_from_prev: 18.23
+
