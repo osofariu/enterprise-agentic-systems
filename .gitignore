@@ -3,3 +3,5 @@
 *.db-wal
 *.db-journal
 .env
+.claude
+.venv
